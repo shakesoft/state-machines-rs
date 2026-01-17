@@ -19,7 +19,7 @@ state-machines-macro = { version = "0.8.0", path = "../state-machines-macro" }
 
 [dev-dependencies]
 pollster = "0.4"
-criterion = { version = "0.7", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 
 [[bench]]
