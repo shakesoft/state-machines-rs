@@ -63,7 +63,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-state-machines = "0.6"
+state-machines = "0.8"
 ```
 
 ### Basic Example
