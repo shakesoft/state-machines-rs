@@ -8,7 +8,6 @@ license = "MIT"
 repository = "https://github.com/state-machines/state-machines-rs"
 keywords = ["state-machine", "cli", "mermaid", "visualization"]
 categories = ["command-line-utilities", "development-tools"]
-publish = false
 
 [[bin]]
 name = "state-machines"
