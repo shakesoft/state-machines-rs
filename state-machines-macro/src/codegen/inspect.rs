@@ -121,6 +121,7 @@ pub fn generate_inspectable_impl(machine: &StateMachine) -> Result<TokenStream2>
     };
 
     Ok(quote! {
+        #[allow(unexpected_cfgs)]
         #[cfg(feature = "inspect")]
         const _: () = {
             extern crate alloc as __sm_alloc;
