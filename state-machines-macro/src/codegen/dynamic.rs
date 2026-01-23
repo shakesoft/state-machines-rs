@@ -301,10 +301,9 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
         };
 
     // Default impl only for generic context with Default bound, or concrete context with Default
-    let default_impl = if machine.context.is_some() {
+    let default_impl = if let Some(concrete_ctx) = &machine.context {
         // Concrete context: only generate Default impl if the concrete type has Default
         // We can't check that at macro time, so we conditionally generate with where clause
-        let concrete_ctx = machine.context.as_ref().unwrap();
         quote! {
             impl Default for #dynamic_name where #concrete_ctx: ::core::default::Default {
                 fn default() -> Self {
