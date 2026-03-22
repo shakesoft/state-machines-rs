@@ -74,6 +74,7 @@ fn test_event_enum() {
 }
 
 // Async dynamic dispatch test
+#[cfg(feature = "async")]
 state_machine! {
     name: AsyncProcessor,
     dynamic: true,
@@ -90,6 +91,7 @@ state_machine! {
     }
 }
 
+#[cfg(feature = "async")]
 #[test]
 fn test_async_dynamic_dispatch() {
     use pollster::block_on;

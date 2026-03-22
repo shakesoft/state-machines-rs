@@ -66,6 +66,13 @@ impl StateMachine {
     /// The error includes a span pointing to the problematic element
     /// and a descriptive message.
     pub fn validate(&self) -> Result<()> {
+        if self.async_mode && !cfg!(feature = "async") {
+            return Err(syn::Error::new(
+                self.name.span(),
+                "`async: true` requires enabling the `async` feature on `state-machines`",
+            ));
+        }
+
         // Validate initial state
 
         // The initial state must be a leaf state, not a superstate

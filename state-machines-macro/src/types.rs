@@ -19,6 +19,7 @@ pub struct StateMachine {
     pub initial: Ident,
     #[allow(dead_code)]
     pub context: Option<Type>,
+    pub error: Option<Type>,
     pub states: Vec<Ident>,
     pub state_storage: Vec<StateStorageSpec>,
     pub hierarchy: Hierarchy,

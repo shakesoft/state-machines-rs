@@ -26,6 +26,7 @@ impl Parse for StateMachine {
         let mut name = None;
         let mut initial = None;
         let mut context = None;
+        let mut error = None;
         let mut states = None;
         let mut events = None;
         let mut async_mode = false;
@@ -62,6 +63,10 @@ impl Parse for StateMachine {
                     "context" => {
                         input.parse::<Token![:]>()?;
                         context = Some(input.parse()?);
+                    }
+                    "error" => {
+                        input.parse::<Token![:]>()?;
+                        error = Some(input.parse()?);
                     }
                     "states" => {
                         input.parse::<Token![:]>()?;
@@ -113,6 +118,7 @@ impl Parse for StateMachine {
             initial: initial
                 .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `initial` field"))?,
             context,
+            error,
             states: states
                 .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `states` field"))?,
             state_storage,

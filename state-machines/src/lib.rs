@@ -8,9 +8,9 @@ pub mod core {
 }
 
 pub use state_machines_core::{
-    AroundOutcome, AroundStage, DynamicError, EventDefinition, Machine, MachineDefinition,
-    MachineState, SubstateOf, SuperstateDefinition, TransitionContext, TransitionDefinition,
-    TransitionError, TransitionErrorKind, TransitionResult,
+    AroundOutcome, AroundStage, CallbackError, DynamicError, EventDefinition, EventError, Machine,
+    MachineDefinition, MachineState, SubstateOf, SuperstateDefinition, TransitionContext,
+    TransitionDefinition, TransitionError, TransitionErrorKind, TransitionResult,
 };
 pub use state_machines_macro::state_machine;
 

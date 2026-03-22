@@ -22,4 +22,5 @@ syn = { version = "2.0.110", features = ["full"] }
 
 [features]
 default = []
+async = []
 dynamic = []

@@ -177,6 +177,21 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
     let event_name = quote::format_ident!("{}Event", machine_name);
     let initial_state = &machine.initial;
     let is_async = machine.async_mode;
+    let dynamic_error_ty = if let Some(error_ty) = machine.error.as_ref() {
+        quote! { state_machines::DynamicError<#error_ty> }
+    } else {
+        quote! { state_machines::DynamicError }
+    };
+    let dynamic_error_ctor = if let Some(error_ty) = machine.error.as_ref() {
+        quote! { state_machines::DynamicError::<#error_ty> }
+    } else {
+        quote! { state_machines::DynamicError }
+    };
+    let map_event_error = if machine.error.is_some() {
+        quote! { state_machines::DynamicError::from_event_error(err) }
+    } else {
+        quote! { state_machines::DynamicError::from_guard_error(err) }
+    };
 
     // Helper to convert snake_case to PascalCase for enum variants
     let to_pascal_case = |s: &str| -> String {
@@ -221,7 +236,7 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
                                             Ok(new_machine) => #any_state_name::#target_state(new_machine),
                                             Err((old_machine, err)) => {
                                                 self.inner = ::core::option::Option::Some(#any_state_name::#source_state(old_machine));
-                                                return Err(state_machines::DynamicError::from_guard_error(err));
+                                                return Err(#map_event_error);
                                             }
                                         }
                                     }
@@ -233,7 +248,7 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
                                             Ok(new_machine) => #any_state_name::#target_state(new_machine),
                                             Err((old_machine, err)) => {
                                                 self.inner = ::core::option::Option::Some(#any_state_name::#source_state(old_machine));
-                                                return Err(state_machines::DynamicError::from_guard_error(err));
+                                                return Err(#map_event_error);
                                             }
                                         }
                                     }
@@ -246,7 +261,7 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
                                         Ok(new_machine) => #any_state_name::#target_state(new_machine),
                                         Err((old_machine, err)) => {
                                             self.inner = ::core::option::Option::Some(#any_state_name::#source_state(old_machine));
-                                            return Err(state_machines::DynamicError::from_guard_error(err));
+                                            return Err(#map_event_error);
                                         }
                                     }
                                 }
@@ -258,7 +273,7 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
                                         Ok(new_machine) => #any_state_name::#target_state(new_machine),
                                         Err((old_machine, err)) => {
                                             self.inner = ::core::option::Option::Some(#any_state_name::#source_state(old_machine));
-                                            return Err(state_machines::DynamicError::from_guard_error(err));
+                                            return Err(#map_event_error);
                                         }
                                     }
                                 }
@@ -277,7 +292,7 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
         (state, event) => {
             let state_name = state.name();
             self.inner = ::core::option::Option::Some(state);
-            return Err(state_machines::DynamicError::invalid_transition(
+            return Err(#dynamic_error_ctor::invalid_transition(
                 state_name,
                 event.name(),
             ));
@@ -285,9 +300,9 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
     };
 
     let handle_sig = if is_async {
-        quote! { pub async fn handle(&mut self, event: #event_name) -> Result<(), state_machines::DynamicError> }
+        quote! { pub async fn handle(&mut self, event: #event_name) -> Result<(), #dynamic_error_ty> }
     } else {
-        quote! { pub fn handle(&mut self, event: #event_name) -> Result<(), state_machines::DynamicError> }
+        quote! { pub fn handle(&mut self, event: #event_name) -> Result<(), #dynamic_error_ty> }
     };
 
     // Determine struct and impl generics based on context
@@ -387,17 +402,17 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
                     /// Returns an error if:
                     /// - Not currently in the `#state_name` state
                     /// - The machine has been extracted via `into_{state}()` methods
-                    pub fn #set_method(&mut self, data: #data_ty) -> Result<(), state_machines::DynamicError> {
+                    pub fn #set_method(&mut self, data: #data_ty) -> Result<(), #dynamic_error_ty> {
                         match self.inner.as_mut() {
                             ::core::option::Option::Some(state) => match state {
                                 #(#set_match_arms)*
-                                other => Err(state_machines::DynamicError::wrong_state(
+                                other => Err(#dynamic_error_ctor::wrong_state(
                                     #state_str,
                                     other.name(),
                                     stringify!(#set_method),
                                 )),
                             },
-                            ::core::option::Option::None => Err(state_machines::DynamicError::wrong_state(
+                            ::core::option::Option::None => Err(#dynamic_error_ctor::wrong_state(
                                 #state_str,
                                 "<extracted>",
                                 stringify!(#set_method),

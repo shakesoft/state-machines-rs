@@ -100,12 +100,64 @@ impl GuardError {
     }
 }
 
+/// Error returned when a before/after callback returns a user-defined error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallbackError<E> {
+    pub action: &'static str,
+    pub event: &'static str,
+    pub source: E,
+}
+
+impl<E> CallbackError<E> {
+    pub fn new(action: &'static str, event: &'static str, source: E) -> Self {
+        Self {
+            action,
+            event,
+            source,
+        }
+    }
+}
+
+/// Error returned from typestate event methods.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventError<E> {
+    Guard(GuardError),
+    Callback(CallbackError<E>),
+}
+
+impl<E> EventError<E> {
+    pub const fn guard(err: GuardError) -> Self {
+        Self::Guard(err)
+    }
+
+    pub fn callback(action: &'static str, event: &'static str, source: E) -> Self {
+        Self::Callback(CallbackError::new(action, event, source))
+    }
+}
+
+#[doc(hidden)]
+pub trait FallibleCallbackReturn<E> {
+    fn into_result(self) -> Result<(), E>;
+}
+
+impl<E> FallibleCallbackReturn<E> for () {
+    fn into_result(self) -> Result<(), E> {
+        Ok(())
+    }
+}
+
+impl<E> FallibleCallbackReturn<E> for Result<(), E> {
+    fn into_result(self) -> Result<(), E> {
+        self
+    }
+}
+
 /// Error returned when dynamic dispatch fails.
 ///
 /// This error type is used by the dynamic mode wrapper when runtime
 /// event dispatch encounters errors like invalid transitions or guard failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DynamicError {
+pub enum DynamicError<E = ()> {
     /// Attempted to trigger an event that's not valid from the current state.
     InvalidTransition {
         from: &'static str,
@@ -121,6 +173,12 @@ pub enum DynamicError {
         action: &'static str,
         event: &'static str,
     },
+    /// A before/after callback returned a user-defined error.
+    CallbackFailed {
+        action: &'static str,
+        event: &'static str,
+        source: E,
+    },
     /// Attempted to access or modify state data when in wrong state.
     WrongState {
         expected: &'static str,
@@ -129,7 +187,7 @@ pub enum DynamicError {
     },
 }
 
-impl DynamicError {
+impl<E> DynamicError<E> {
     pub fn invalid_transition(from: &'static str, event: &'static str) -> Self {
         Self::InvalidTransition { from, event }
     }
@@ -140,6 +198,14 @@ impl DynamicError {
 
     pub fn action_failed(action: &'static str, event: &'static str) -> Self {
         Self::ActionFailed { action, event }
+    }
+
+    pub fn callback_failed(action: &'static str, event: &'static str, source: E) -> Self {
+        Self::CallbackFailed {
+            action,
+            event,
+            source,
+        }
     }
 
     pub fn wrong_state(
@@ -169,6 +235,13 @@ impl DynamicError {
                 from: "",
                 event: err.event,
             },
+        }
+    }
+
+    pub fn from_event_error(err: EventError<E>) -> Self {
+        match err {
+            EventError::Guard(err) => Self::from_guard_error(err),
+            EventError::Callback(err) => Self::callback_failed(err.action, err.event, err.source),
         }
     }
 }

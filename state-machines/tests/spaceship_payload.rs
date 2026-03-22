@@ -4,6 +4,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+#[cfg(feature = "async")]
 use pollster::block_on;
 use state_machines::state_machine;
 
@@ -81,15 +82,20 @@ fn sync_payload_event_runs_guards_and_callbacks() {
     assert_eq!(AFTER_CALLED_WITH.load(Ordering::SeqCst), 3);
 }
 
+#[cfg(feature = "async")]
 #[derive(Clone, Debug)]
 struct Cargo {
     weight: u8,
 }
 
+#[cfg(feature = "async")]
 static ROUTE_CLEAR: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "async")]
 static ASYNC_BEFORE_CALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "async")]
 static ASYNC_AFTER_CALLED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(feature = "async")]
 state_machine! {
     name: CargoBayController,
 
@@ -110,6 +116,7 @@ state_machine! {
     }
 }
 
+#[cfg(feature = "async")]
 impl<C, S> CargoBayController<C, S> {
     async fn route_clear(&self, _ctx: &C, cargo: &Cargo) -> bool {
         ROUTE_CLEAR.load(Ordering::SeqCst) && cargo.weight <= 4
@@ -124,6 +131,7 @@ impl<C, S> CargoBayController<C, S> {
     }
 }
 
+#[cfg(feature = "async")]
 #[test]
 fn async_payload_event_obeys_guards() {
     ROUTE_CLEAR.store(false, Ordering::SeqCst);

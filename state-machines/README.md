@@ -166,6 +166,13 @@ fn main() {
 
 ### Async Support
 
+Async state machines are feature-gated in `0.9`:
+
+```toml
+[dependencies]
+state-machines = { version = "0.9", features = ["async"] }
+```
+
 The typestate pattern works seamlessly with async Rust:
 
 ```rust,ignore
@@ -209,6 +216,41 @@ async fn main() {
 
     // Type: HttpRequest<Success>
     let request = request.succeed().await.unwrap();
+}
+
+// If callbacks can fail, declare an error type for the machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HttpError {
+    Timeout,
+}
+
+state_machine! {
+    name: AuthRecovery,
+    async: true,
+    error: HttpError,
+    initial: RefreshToken,
+    states: [RefreshToken, Done],
+    events {
+        refresh {
+            before: [refresh_token],
+            transition: { from: RefreshToken, to: Done }
+        }
+    }
+}
+
+impl<C, S> AuthRecovery<C, S> {
+    async fn refresh_token(&self) -> Result<(), HttpError> {
+        Err(HttpError::Timeout)
+    }
+}
+
+// `before`/`after` callback failures do not advance the state.
+match AuthRecovery::new(()).refresh().await {
+    Err((_machine, state_machines::EventError::Callback(err))) => {
+        assert_eq!(err.action, "refresh_token");
+        assert_eq!(err.source, HttpError::Timeout);
+    }
+    _ => unreachable!(),
 }
 ```
 
@@ -810,6 +852,9 @@ fn handle_network_events(conn: &mut DynamicConnection<()>) {
             Err(DynamicError::ActionFailed { action, event }) => {
                 eprintln!("Action {} failed for {}", action, event);
             }
+            Err(DynamicError::CallbackFailed { action, event, source }) => {
+                eprintln!("Callback {} failed for {}: {:?}", action, event, source);
+            }
             Err(DynamicError::WrongState { expected, actual, operation }) => {
                 eprintln!("Operation {} expected state {}, but in {}", operation, expected, actual);
             }
@@ -825,18 +870,20 @@ fn main() {
 
 ### Error Handling
 
-Dynamic mode provides `DynamicError` with four variants:
+Dynamic mode provides `DynamicError<E = ()>` with five variants:
 
 ```rust
-pub enum DynamicError {
+pub enum DynamicError<E = ()> {
     InvalidTransition { from: &'static str, event: &'static str },
     GuardFailed { guard: &'static str, event: &'static str },
     ActionFailed { action: &'static str, event: &'static str },
+    CallbackFailed { action: &'static str, event: &'static str, source: E },
     WrongState { expected: &'static str, actual: &'static str, operation: &'static str },
 }
 ```
 
-Unlike typestate mode (which returns the old machine on error), dynamic mode keeps the machine in a valid state:
+If your machine declares `error: AuthError`, dynamic dispatch uses `DynamicError<AuthError>`.
+Guard and callback failures leave the wrapper in its source state.
 
 ```rust,ignore
 let mut machine = DynamicTrafficLight::new(());

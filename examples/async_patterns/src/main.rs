@@ -12,6 +12,7 @@
 //! - ⚠️ Handle timeouts gracefully
 //!
 //! Async state machines let you use `.await` in guards and callbacks without blocking.
+//! They require enabling the crate's `async` feature in `Cargo.toml`.
 //!
 //! ## Sync vs Async: The Core Difference
 //!
@@ -49,7 +50,7 @@
 //! 2. **Async Guards** - Guard functions that can await
 //! 3. **Async Callbacks** - Before/after callbacks with async operations
 //! 4. **Blocking vs Async** - When to use which pattern
-//! 5. **Error Handling** - Timeouts and retries in async context
+//! 5. **Error Handling** - Fallible callbacks can return `Result<(), E>` and prevent state advancement
 //!
 //! ## Caveats & Flow
 //!
@@ -128,7 +129,7 @@
 //! - Timeouts can occur at any stage
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use state_machines::state_machine;
+use state_machines::{EventError, state_machine};
 use std::time::Duration;
 
 /// Simulated signal strength (0-100)
@@ -136,6 +137,12 @@ static SIGNAL_STRENGTH: AtomicU64 = AtomicU64::new(0);
 
 /// Simulated network available flag
 static NETWORK_AVAILABLE: AtomicBool = AtomicBool::new(true);
+static PREP_SHOULD_FAIL: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DroneError {
+    PreparationFailed,
+}
 
 /// Helper for signal system
 struct SignalSystem;
@@ -185,6 +192,7 @@ state_machine! {
     name: DroneScout,
 
     async: true,  // ← Enable async mode
+    error: DroneError,
 
     initial: Idle,
     states: [Idle, Scanning, SignalLock, Transmitting, DataReceived],
@@ -282,13 +290,18 @@ impl<C, S> DroneScout<C, S> {
     }
 
     /// Async before callback: Prepare transmission
-    async fn prepare_transmission(&self) {
+    async fn prepare_transmission(&self) -> Result<(), DroneError> {
         println!("[Before] Preparing data transmission...");
         println!("[Before]   Compressing data...");
         pollster::block_on(async_std_sleep(Duration::from_millis(25)));
+        if PREP_SHOULD_FAIL.load(Ordering::Relaxed) {
+            println!("[Before]   Compression worker unavailable!");
+            return Err(DroneError::PreparationFailed);
+        }
         println!("[Before]   Encryption enabled...");
         pollster::block_on(async_std_sleep(Duration::from_millis(25)));
         println!("[Before] Ready to transmit");
+        Ok(())
     }
 
     /// Async after callback: Log transmission complete
@@ -296,6 +309,18 @@ impl<C, S> DroneScout<C, S> {
         println!("[After] Transmission complete!");
         SignalSystem::transmit_data().await;
         println!("[After] All data received by base");
+    }
+}
+
+fn print_async_error(err: EventError<DroneError>) {
+    match err {
+        EventError::Guard(err) => {
+            println!("  Guard failed: {}", err.guard);
+        }
+        EventError::Callback(err) => {
+            println!("  Callback failed: {}", err.action);
+            println!("  Source error: {:?}", err.source);
+        }
     }
 }
 
@@ -307,6 +332,7 @@ fn main() {
     println!("--- Scenario 1: Nominal Communication ---");
     SignalSystem::set_strength(75); // Good signal
     NETWORK_AVAILABLE.store(true, Ordering::Relaxed);
+    PREP_SHOULD_FAIL.store(false, Ordering::Relaxed);
 
     let drone = DroneScout::new(());
     println!("Drone created in Idle state\n");
@@ -320,7 +346,8 @@ fn main() {
                 Ok(d)
             }
             Err((_d, err)) => {
-                println!("✗ Scan failed: {}", err.guard);
+                println!("✗ Scan failed:");
+                print_async_error(err);
                 Err(())
             }
         }
@@ -335,7 +362,8 @@ fn main() {
                 Ok(d)
             }
             Err((_d, err)) => {
-                println!("✗ Lock failed: {}", err.guard);
+                println!("✗ Lock failed:");
+                print_async_error(err);
                 Err(())
             }
         }
@@ -350,7 +378,8 @@ fn main() {
                 Ok(d)
             }
             Err((_d, err)) => {
-                println!("✗ Transmission failed: {}", err.guard);
+                println!("✗ Transmission failed:");
+                print_async_error(err);
                 Err(())
             }
         }
@@ -374,18 +403,51 @@ fn main() {
             Ok(_) => println!("✗ ERROR: Should have failed!"),
             Err((_drone, err)) => {
                 println!("✓ Guard correctly prevented transition");
-                println!("  Failed guard: {}", err.guard);
+                print_async_error(err);
                 println!("  Drone remains in Scanning state");
                 println!("  Can retry after signal improves or timeout\n");
             }
         }
     });
 
+    // Scenario 3: Callback failure - before callback returns a real error
+    println!("\n--- Scenario 3: Callback Failure (No State Advance) ---");
+    SignalSystem::set_strength(80);
+    NETWORK_AVAILABLE.store(true, Ordering::Relaxed);
+    PREP_SHOULD_FAIL.store(true, Ordering::Relaxed);
+
+    let drone = DroneScout::new(());
+    let drone = pollster::block_on(async { drone.scan().await.unwrap() });
+    let drone = pollster::block_on(async { drone.lock().await.unwrap() });
+
+    println!("Transmission prep will fail, attempting transmit...\n");
+    let drone = pollster::block_on(async {
+        match drone.transmit().await {
+            Ok(_) => {
+                println!("✗ ERROR: Should have failed!");
+                Err(())
+            }
+            Err((drone, err)) => {
+                println!("✓ Callback error prevented state advance");
+                print_async_error(err);
+                println!("  Drone remains in SignalLock and can retry\n");
+                Ok(drone)
+            }
+        }
+    })
+    .unwrap();
+
+    PREP_SHOULD_FAIL.store(false, Ordering::Relaxed);
+    let _drone = pollster::block_on(async { drone.transmit().await.unwrap() });
+    println!("✓ Retry succeeded once the callback stopped failing");
+
     println!("\n=== Key Takeaways ===");
     println!("✓ async: true enables async mode for entire state machine");
+    println!("✓ error: DroneError enables fallible before/after callbacks");
     println!("✓ All guards and callbacks become async fn");
     println!("✓ Must .await every transition");
     println!("✓ Can use async I/O in guards (scan_for_signal, etc.)");
+    println!("✓ Callback errors return the original machine for retry");
     println!("✓ Context must be Send for async machines");
     println!("✓ Don't use blocking operations in async guards");
 

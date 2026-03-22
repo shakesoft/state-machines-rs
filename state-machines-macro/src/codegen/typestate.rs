@@ -348,17 +348,12 @@ fn generate_transition_method(
 ) -> Result<TokenStream2> {
     let machine_name = &machine.name;
     let event_name = &edge.event;
-
-    // Convert event name to snake_case for the method name
-    // Example: Trip → trip, EnterHalfOpen → enter_half_open
-    // This ensures generated methods follow Rust naming conventions
     let method_name = to_snake_case_ident(event_name);
-
     let target_state = &edge.target;
     let is_async = machine.async_mode;
     let core_path = quote!(::state_machines::core);
+    let error_ty = machine.error.as_ref();
 
-    // Build method signature using snake_case method name
     let (method_sig, payload_ref) = if let Some(payload_ty) = &edge.payload {
         let sig = if is_async {
             quote! {
@@ -383,130 +378,177 @@ fn generate_transition_method(
         (sig, quote! {})
     };
 
-    // Determine return type - depends on whether context is concrete or generic
+    let return_error_ty = if let Some(error_ty) = error_ty {
+        quote! { #core_path::EventError<#error_ty> }
+    } else {
+        quote! { #core_path::GuardError }
+    };
+
     let return_type = if machine.context.is_some() {
-        // Concrete context: struct is Machine<S>, so return Machine<TargetState>
         quote! {
-            ::core::result::Result<#machine_name<#target_state>, (Self, #core_path::GuardError)>
+            ::core::result::Result<#machine_name<#target_state>, (Self, #return_error_ty)>
         }
     } else {
-        // Generic context: struct is Machine<C, S>, so return Machine<C, TargetState>
         quote! {
-            ::core::result::Result<#machine_name<C, #target_state>, (Self, #core_path::GuardError)>
+            ::core::result::Result<#machine_name<C, #target_state>, (Self, #return_error_ty)>
         }
     };
 
-    // Build guard checks
-    let mut guard_checks = Vec::new();
+    let guard_error = |guard: &Ident| {
+        if error_ty.is_some() {
+            quote! {
+                #core_path::EventError::guard(
+                    #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
+                )
+            }
+        } else {
+            quote! {
+                #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
+            }
+        }
+    };
 
-    // Event-level guards
+    let kind_error = || {
+        if error_ty.is_some() {
+            quote! {
+                #core_path::EventError::guard(
+                    #core_path::GuardError::with_kind(callback_name, stringify!(#event_name), err.kind)
+                )
+            }
+        } else {
+            quote! {
+                #core_path::GuardError::with_kind(callback_name, stringify!(#event_name), err.kind)
+            }
+        }
+    };
+
+    let callback_call = |receiver: TokenStream2, callback: &Ident| {
+        if edge.payload.is_some() {
+            if is_async {
+                quote! { #receiver.#callback(#payload_ref).await }
+            } else {
+                quote! { #receiver.#callback(#payload_ref) }
+            }
+        } else if is_async {
+            quote! { #receiver.#callback().await }
+        } else {
+            quote! { #receiver.#callback() }
+        }
+    };
+
+    let mut guard_checks = Vec::new();
     for guard in &edge.guards {
+        let guard_error = guard_error(guard);
         let check = if edge.payload.is_some() {
             if is_async {
                 quote! {
                     if !self.#guard(&self.ctx, #payload_ref).await {
-                        return ::core::result::Result::Err((
-                            self,
-                            #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
-                        ));
+                        return ::core::result::Result::Err((self, #guard_error));
                     }
                 }
             } else {
                 quote! {
                     if !self.#guard(&self.ctx, #payload_ref) {
-                        return ::core::result::Result::Err((
-                            self,
-                            #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
-                        ));
+                        return ::core::result::Result::Err((self, #guard_error));
                     }
                 }
             }
         } else if is_async {
             quote! {
                 if !self.#guard(&self.ctx).await {
-                    return ::core::result::Result::Err((
-                        self,
-                        #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
-                    ));
+                    return ::core::result::Result::Err((self, #guard_error));
                 }
             }
         } else {
             quote! {
                 if !self.#guard(&self.ctx) {
-                    return ::core::result::Result::Err((
-                        self,
-                        #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
-                    ));
+                    return ::core::result::Result::Err((self, #guard_error));
                 }
             }
         };
         guard_checks.push(check);
     }
 
-    // Unless guards (inverted)
     for guard in &edge.unless {
+        let guard_error = guard_error(guard);
         let check = if edge.payload.is_some() {
             if is_async {
                 quote! {
                     if self.#guard(&self.ctx, #payload_ref).await {
-                        return ::core::result::Result::Err((
-                            self,
-                            #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
-                        ));
+                        return ::core::result::Result::Err((self, #guard_error));
                     }
                 }
             } else {
                 quote! {
                     if self.#guard(&self.ctx, #payload_ref) {
-                        return ::core::result::Result::Err((
-                            self,
-                            #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
-                        ));
+                        return ::core::result::Result::Err((self, #guard_error));
                     }
                 }
             }
         } else if is_async {
             quote! {
                 if self.#guard(&self.ctx).await {
-                    return ::core::result::Result::Err((
-                        self,
-                        #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
-                    ));
+                    return ::core::result::Result::Err((self, #guard_error));
                 }
             }
         } else {
             quote! {
                 if self.#guard(&self.ctx) {
-                    return ::core::result::Result::Err((
-                        self,
-                        #core_path::GuardError::new(stringify!(#guard), stringify!(#event_name))
-                    ));
+                    return ::core::result::Result::Err((self, #guard_error));
                 }
             }
         };
         guard_checks.push(check);
     }
 
-    // Build before callback calls
     let before_calls: Vec<_> = edge
         .before
         .iter()
         .map(|callback| {
-            if edge.payload.is_some() {
-                if is_async {
-                    quote! { self.#callback(#payload_ref).await; }
-                } else {
-                    quote! { self.#callback(#payload_ref); }
+            let call = callback_call(quote! { self }, callback);
+            if let Some(error_ty) = error_ty {
+                quote! {
+                    let callback_result: ::core::result::Result<(), #error_ty> =
+                        #core_path::FallibleCallbackReturn::into_result(#call);
+                    if let Err(source) = callback_result {
+                        return ::core::result::Result::Err((
+                            self,
+                            #core_path::EventError::callback(
+                                stringify!(#callback),
+                                stringify!(#event_name),
+                                source,
+                            ),
+                        ));
+                    }
                 }
-            } else if is_async {
-                quote! { self.#callback().await; }
             } else {
-                quote! { self.#callback(); }
+                quote! {
+                    let (): () = #call;
+                }
             }
         })
         .collect();
 
-    // Build storage field transfers with initialization for target state
+    let source_field_bindings: Vec<_> = machine
+        .state_storage
+        .iter()
+        .map(|spec| {
+            let field = &spec.field;
+            let local = quote::format_ident!("__sm_prev_{}", field);
+            quote! { #field: #local }
+        })
+        .collect();
+
+    let restore_source_fields: Vec<_> = machine
+        .state_storage
+        .iter()
+        .map(|spec| {
+            let field = &spec.field;
+            let local = quote::format_ident!("__sm_prev_{}", field);
+            quote! { #field: #local }
+        })
+        .collect();
+
     let storage_transfers: Vec<_> = machine
         .state_storage
         .iter()
@@ -514,9 +556,6 @@ fn generate_transition_method(
             let field = &spec.field;
             let state_name = &spec.state_name;
             let ty = &spec.ty;
-
-            // If transitioning to this state, initialize with Default
-            // Otherwise, clear the data (set to None) since we're not in that state
             if state_name == target_state {
                 quote! {
                     #field: ::core::option::Option::Some(<#ty as ::core::default::Default>::default())
@@ -529,50 +568,67 @@ fn generate_transition_method(
         })
         .collect();
 
-    // Build after callback calls (on new machine)
     let after_calls: Vec<_> = edge
         .after
         .iter()
         .map(|callback| {
-            if edge.payload.is_some() {
-                if is_async {
-                    quote! { new_machine.#callback(#payload_ref).await; }
-                } else {
-                    quote! { new_machine.#callback(#payload_ref); }
+            let call = callback_call(quote! { new_machine }, callback);
+            if let Some(error_ty) = error_ty {
+                quote! {
+                    let callback_result: ::core::result::Result<(), #error_ty> =
+                        #core_path::FallibleCallbackReturn::into_result(#call);
+                    if let Err(source) = callback_result {
+                        let #machine_name { ctx, .. } = new_machine;
+                        let old_machine = #machine_name {
+                            ctx,
+                            _state: ::core::marker::PhantomData,
+                            #( #restore_source_fields, )*
+                        };
+                        return ::core::result::Result::Err((
+                            old_machine,
+                            #core_path::EventError::callback(
+                                stringify!(#callback),
+                                stringify!(#event_name),
+                                source,
+                            ),
+                        ));
+                    }
                 }
-            } else if is_async {
-                quote! { new_machine.#callback().await; }
             } else {
-                quote! { new_machine.#callback(); }
+                quote! {
+                    let (): () = #call;
+                }
             }
         })
         .collect();
 
-    // Check if we have around callbacks
-    let has_around = !edge.around.is_empty();
+    let rollback_old_machine = quote! {
+        let #machine_name { ctx, .. } = new_machine;
+        let old_machine = #machine_name {
+            ctx,
+            _state: ::core::marker::PhantomData,
+            #( #restore_source_fields, )*
+        };
+    };
 
-    // Assemble the complete method
+    let has_around = !edge.around.is_empty();
     if has_around {
-        // Generate around callback invocations - Before stage (on self)
         let around_before_checks: Vec<_> = edge
             .around
             .iter()
             .map(|callback| {
+                let kind_error = kind_error();
                 if is_async {
                     quote! {
                         match self.#callback(#core_path::AroundStage::Before).await {
                             #core_path::AroundOutcome::Proceed => {},
                             #core_path::AroundOutcome::Abort(err) => {
-                                // Preserve the full TransitionError kind (GuardFailed, ActionFailed, etc.)
                                 let callback_name = match &err.kind {
                                     #core_path::TransitionErrorKind::GuardFailed { guard } => *guard,
                                     #core_path::TransitionErrorKind::ActionFailed { action } => *action,
                                     #core_path::TransitionErrorKind::InvalidTransition => stringify!(#callback),
                                 };
-                                return ::core::result::Result::Err((
-                                    self,
-                                    #core_path::GuardError::with_kind(callback_name, stringify!(#event_name), err.kind)
-                                ));
+                                return ::core::result::Result::Err((self, #kind_error));
                             }
                         }
                     }
@@ -581,16 +637,12 @@ fn generate_transition_method(
                         match self.#callback(#core_path::AroundStage::Before) {
                             #core_path::AroundOutcome::Proceed => {},
                             #core_path::AroundOutcome::Abort(err) => {
-                                // Preserve the full TransitionError kind (GuardFailed, ActionFailed, etc.)
                                 let callback_name = match &err.kind {
                                     #core_path::TransitionErrorKind::GuardFailed { guard } => *guard,
                                     #core_path::TransitionErrorKind::ActionFailed { action } => *action,
                                     #core_path::TransitionErrorKind::InvalidTransition => stringify!(#callback),
                                 };
-                                return ::core::result::Result::Err((
-                                    self,
-                                    #core_path::GuardError::with_kind(callback_name, stringify!(#event_name), err.kind)
-                                ));
+                                return ::core::result::Result::Err((self, #kind_error));
                             }
                         }
                     }
@@ -598,30 +650,23 @@ fn generate_transition_method(
             })
             .collect();
 
-        // Generate around callback invocations - AfterSuccess stage (on new_machine)
         let around_after_checks: Vec<_> = edge
             .around
             .iter()
             .map(|callback| {
+                let kind_error = kind_error();
                 if is_async {
                     quote! {
                         match new_machine.#callback(#core_path::AroundStage::AfterSuccess).await {
                             #core_path::AroundOutcome::Proceed => {},
                             #core_path::AroundOutcome::Abort(err) => {
-                                // LIMITATION: AfterSuccess aborts cannot be properly handled with current typestate return type.
-                                // The transition has already occurred, so we can't return the old machine.
-                                // We panic here to make this limitation explicit rather than silently ignoring the error.
                                 let callback_name = match &err.kind {
                                     #core_path::TransitionErrorKind::GuardFailed { guard } => *guard,
                                     #core_path::TransitionErrorKind::ActionFailed { action } => *action,
                                     #core_path::TransitionErrorKind::InvalidTransition => stringify!(#callback),
                                 };
-                                panic!(
-                                    "Around callback '{}' aborted at AfterSuccess stage during event '{}', but typestate machines \
-                                     cannot properly surface this error because the state transition has already occurred. \
-                                     Consider using Before stage aborts instead, or changing your callback to return Proceed.",
-                                    callback_name, stringify!(#event_name)
-                                );
+                                #rollback_old_machine
+                                return ::core::result::Result::Err((old_machine, #kind_error));
                             }
                         }
                     }
@@ -630,20 +675,13 @@ fn generate_transition_method(
                         match new_machine.#callback(#core_path::AroundStage::AfterSuccess) {
                             #core_path::AroundOutcome::Proceed => {},
                             #core_path::AroundOutcome::Abort(err) => {
-                                // LIMITATION: AfterSuccess aborts cannot be properly handled with current typestate return type.
-                                // The transition has already occurred, so we can't return the old machine.
-                                // We panic here to make this limitation explicit rather than silently ignoring the error.
                                 let callback_name = match &err.kind {
                                     #core_path::TransitionErrorKind::GuardFailed { guard } => *guard,
                                     #core_path::TransitionErrorKind::ActionFailed { action } => *action,
                                     #core_path::TransitionErrorKind::InvalidTransition => stringify!(#callback),
                                 };
-                                panic!(
-                                    "Around callback '{}' aborted at AfterSuccess stage during event '{}', but typestate machines \
-                                     cannot properly surface this error because the state transition has already occurred. \
-                                     Consider using Before stage aborts instead, or changing your callback to return Proceed.",
-                                    callback_name, stringify!(#event_name)
-                                );
+                                #rollback_old_machine
+                                return ::core::result::Result::Err((old_machine, #kind_error));
                             }
                         }
                     }
@@ -653,49 +691,46 @@ fn generate_transition_method(
 
         Ok(quote! {
             #method_sig -> #return_type {
-                // Around callbacks - Before stage
                 #( #around_before_checks )*
-
-                // Check guards
                 #( #guard_checks )*
-
-                // Execute before callbacks on current machine
                 #( #before_calls )*
 
-                // Create new machine with target state
+                let #machine_name {
+                    ctx,
+                    _state: _,
+                    #( #source_field_bindings, )*
+                } = self;
+
                 let mut new_machine = #machine_name {
-                    ctx: self.ctx,
+                    ctx,
                     _state: ::core::marker::PhantomData,
                     #( #storage_transfers, )*
                 };
 
-                // Execute after callbacks on new machine
                 #( #after_calls )*
-
-                // Around callbacks - AfterSuccess stage
                 #( #around_after_checks )*
 
                 ::core::result::Result::Ok(new_machine)
             }
         })
     } else {
-        // No around callbacks - generate simpler code
         Ok(quote! {
             #method_sig -> #return_type {
-                // Check guards
                 #( #guard_checks )*
-
-                // Execute before callbacks on current machine
                 #( #before_calls )*
 
-                // Create new machine with target state
+                let #machine_name {
+                    ctx,
+                    _state: _,
+                    #( #source_field_bindings, )*
+                } = self;
+
                 let mut new_machine = #machine_name {
-                    ctx: self.ctx,
+                    ctx,
                     _state: ::core::marker::PhantomData,
                     #( #storage_transfers, )*
                 };
 
-                // Execute after callbacks on new machine
                 #( #after_calls )*
 
                 ::core::result::Result::Ok(new_machine)
@@ -924,6 +959,11 @@ fn generate_superstate_transition_method(
     let target_state = &edge.target;
     let is_async = machine.async_mode;
     let core_path = quote!(::state_machines::core);
+    let return_error_ty = if let Some(error_ty) = machine.error.as_ref() {
+        quote! { #core_path::EventError<#error_ty> }
+    } else {
+        quote! { #core_path::GuardError }
+    };
 
     // Build method signature (no payload support for now)
     let method_sig = if is_async {
@@ -938,14 +978,12 @@ fn generate_superstate_transition_method(
 
     // Determine return type - depends on whether context is concrete or generic
     let return_type = if machine.context.is_some() {
-        // Concrete context: struct is Machine<S>, so return Machine<TargetState>
         quote! {
-            ::core::result::Result<#machine_name<#target_state>, (Self, #core_path::GuardError)>
+            ::core::result::Result<#machine_name<#target_state>, (Self, #return_error_ty)>
         }
     } else {
-        // Generic context: struct is Machine<C, S>, so return Machine<C, TargetState>
         quote! {
-            ::core::result::Result<#machine_name<C, #target_state>, (Self, #core_path::GuardError)>
+            ::core::result::Result<#machine_name<C, #target_state>, (Self, #return_error_ty)>
         }
     };
 

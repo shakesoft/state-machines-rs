@@ -276,8 +276,7 @@ fn around_callback_preserves_action_failed_error() {
 }
 
 #[test]
-#[should_panic(expected = "Around callback 'after_fail' aborted at AfterSuccess stage")]
-fn after_success_abort_panics_with_helpful_message() {
+fn after_success_abort_rolls_back_to_source_state() {
     state_machine! {
         name: AfterFail,
         initial: Start,
@@ -294,18 +293,18 @@ fn after_success_abort_panics_with_helpful_message() {
         fn failing_after(&self, stage: AroundStage) -> AroundOutcome<Start> {
             match stage {
                 AroundStage::Before => AroundOutcome::Proceed,
-                AroundStage::AfterSuccess => {
-                    // This should panic with a helpful message
-                    AroundOutcome::Abort(state_machines::core::TransitionError::guard_failed(
-                        Start,
-                        "go",
-                        "after_fail",
-                    ))
-                }
+                AroundStage::AfterSuccess => AroundOutcome::Abort(
+                    state_machines::core::TransitionError::guard_failed(Start, "go", "after_fail"),
+                ),
             }
         }
     }
 
     let machine = AfterFail::new(());
-    let _result = machine.go(); // Should panic
+    let result = machine.go();
+    assert!(result.is_err());
+
+    let (_machine, err) = result.unwrap_err();
+    assert_eq!(err.guard, "after_fail");
+    assert_eq!(err.event, "go");
 }
