@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
+#![allow(clippy::enum_variant_names)]
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use state_machines::{

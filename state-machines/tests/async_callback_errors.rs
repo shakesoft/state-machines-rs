@@ -2,7 +2,10 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use pollster::block_on;
 use state_machines::{DynamicError, EventError, state_machine};
@@ -11,6 +14,7 @@ static BEFORE_FAILS: AtomicBool = AtomicBool::new(false);
 static AFTER_FAILS: AtomicBool = AtomicBool::new(false);
 static BEFORE_CALLED: AtomicBool = AtomicBool::new(false);
 static AFTER_CALLED: AtomicBool = AtomicBool::new(false);
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AuthError {
@@ -63,6 +67,7 @@ fn reset_flags() {
 
 #[test]
 fn async_before_callback_failure_returns_source_machine() {
+    let _guard = TEST_LOCK.lock().unwrap();
     reset_flags();
     BEFORE_FAILS.store(true, Ordering::SeqCst);
 
@@ -96,6 +101,7 @@ fn async_before_callback_failure_returns_source_machine() {
 
 #[test]
 fn async_after_callback_failure_rolls_back_transition() {
+    let _guard = TEST_LOCK.lock().unwrap();
     reset_flags();
     AFTER_FAILS.store(true, Ordering::SeqCst);
 
@@ -129,6 +135,7 @@ fn async_after_callback_failure_rolls_back_transition() {
 
 #[test]
 fn async_dynamic_callback_failure_keeps_runtime_state() {
+    let _guard = TEST_LOCK.lock().unwrap();
     reset_flags();
     BEFORE_FAILS.store(true, Ordering::SeqCst);
 

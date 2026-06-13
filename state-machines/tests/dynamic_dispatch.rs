@@ -22,8 +22,10 @@ fn test_dynamic_dispatch_basic() {
     // Create a dynamic machine with unit context
     let mut light = DynamicTrafficLight::new(());
 
-    // Check initial state
-    assert_eq!(light.current_state(), "Red");
+    // Check initial state. Keep the concrete type explicit so public API
+    // changes from `&'static str` are caught at compile time.
+    let state: &'static str = light.current_state();
+    assert_eq!(state, "Red");
 
     // Trigger events dynamically
     light.handle(TrafficLightEvent::Next).unwrap();
@@ -34,6 +36,38 @@ fn test_dynamic_dispatch_basic() {
 
     light.handle(TrafficLightEvent::Next).unwrap();
     assert_eq!(light.current_state(), "Red");
+}
+
+// Regression coverage for dynamic construction with state-associated data on
+// the declared initial state. `DynamicInitialData::new(ctx)` must keep working
+// even when the associated data does not implement `Default`, because the
+// existing constructor initializes state storage as `None`.
+#[derive(Debug)]
+struct InitialDataWithoutDefault {
+    _value: u8,
+}
+
+state_machine! {
+    name: InitialData,
+    dynamic: true,
+    initial: InitialDataReady,
+    states: [
+        InitialDataReady(InitialDataWithoutDefault),
+        InitialDataDone,
+    ],
+    events {
+        finish {
+            transition: { from: InitialDataDone, to: InitialDataDone }
+        }
+    }
+}
+
+#[test]
+fn test_dynamic_new_allows_non_default_initial_state_data() {
+    let machine = DynamicInitialData::new(());
+
+    assert_eq!(machine.current_state(), "InitialDataReady");
+    assert!(machine.initial_data_ready_data().is_none());
 }
 
 #[test]
