@@ -97,19 +97,13 @@ impl Parse for StateMachine {
                             let _: Ident = input.parse()?;
                         }
                     }
-                    other => {
-                        return Err(syn::Error::new(
-                            key.span(),
-                            format!("unexpected key `{}`", other),
-                        ));
+                    _ => {
+                        return Err(unexpected_key(&key));
                     }
                 }
             }
 
-            // Optional trailing comma
-            if input.peek(Token![,]) {
-                input.parse::<Token![,]>()?;
-            }
+            skip_optional_comma(input)?;
         }
 
         // Build the StateMachine, returning errors for missing required fields
@@ -159,23 +153,10 @@ pub fn parse_states_section(input: &ParseBuffer<'_>) -> Result<ParsedStates> {
             let superstate_name: Ident = input.parse()?;
 
             // Check for optional data type
-            let superstate_ty = if input.peek(syn::token::Paren) {
-                let ty_content;
-                parenthesized!(ty_content in input);
-                Some(ty_content.parse()?)
-            } else {
-                None
-            };
+            let superstate_ty = parse_optional_paren_type(input)?;
 
             // If the superstate has data, create a storage spec for it
-            if let Some(ty) = superstate_ty.clone() {
-                let field = storage_field_ident(&superstate_name);
-                storage_specs.push(StateStorageSpec {
-                    state_name: superstate_name.clone(),
-                    field,
-                    ty,
-                });
-            }
+            push_storage_spec(&mut storage_specs, &superstate_name, superstate_ty);
 
             // Parse the superstate's contents
             let mut ancestors = Vec::new();
@@ -202,13 +183,7 @@ pub fn parse_states_section(input: &ParseBuffer<'_>) -> Result<ParsedStates> {
             }
 
             // Check for optional data type
-            let data_ty = if input.peek(syn::token::Paren) {
-                let ty_content;
-                parenthesized!(ty_content in input);
-                Some(ty_content.parse()?)
-            } else {
-                None
-            };
+            let data_ty = parse_optional_paren_type(input)?;
 
             let state_ident = ident;
 
@@ -217,20 +192,10 @@ pub fn parse_states_section(input: &ParseBuffer<'_>) -> Result<ParsedStates> {
             leaves.push(state_ident.clone());
 
             // If the state has data, create a storage spec for it
-            if let Some(ty) = data_ty {
-                let field = storage_field_ident(&state_ident);
-                storage_specs.push(StateStorageSpec {
-                    state_name: state_ident.clone(),
-                    field,
-                    ty,
-                });
-            }
+            push_storage_spec(&mut storage_specs, &state_ident, data_ty);
         }
 
-        // Optional trailing comma
-        if input.peek(Token![,]) {
-            input.parse::<Token![,]>()?;
-        }
+        skip_optional_comma(input)?;
     }
 
     Ok(ParsedStates {
@@ -279,13 +244,7 @@ pub fn parse_superstate_block(
                 }
 
                 // Check for optional data type
-                let data_ty = if content.peek(syn::token::Paren) {
-                    let ty_content;
-                    parenthesized!(ty_content in content);
-                    Some(ty_content.parse()?)
-                } else {
-                    None
-                };
+                let data_ty = parse_optional_paren_type(content)?;
 
                 // Register this leaf with its ancestor chain
                 hierarchy.register_leaf(&state_ident, ancestors);
@@ -293,37 +252,17 @@ pub fn parse_superstate_block(
                 descendants.push(state_ident.clone());
 
                 // If the state has data, create a storage spec for it
-                if let Some(ty) = data_ty {
-                    let field = storage_field_ident(&state_ident);
-                    storage.push(StateStorageSpec {
-                        state_name: state_ident.clone(),
-                        field,
-                        ty,
-                    });
-                }
+                push_storage_spec(storage, &state_ident, data_ty);
             }
             "superstate" => {
                 // Parse a nested superstate
                 let nested_name: Ident = content.parse()?;
 
                 // Check for optional data type
-                let super_data_ty = if content.peek(syn::token::Paren) {
-                    let ty_content;
-                    parenthesized!(ty_content in content);
-                    Some(ty_content.parse()?)
-                } else {
-                    None
-                };
+                let super_data_ty = parse_optional_paren_type(content)?;
 
                 // If the superstate has data, create a storage spec for it
-                if let Some(ty) = super_data_ty.clone() {
-                    let field = storage_field_ident(&nested_name);
-                    storage.push(StateStorageSpec {
-                        state_name: nested_name.clone(),
-                        field,
-                        ty,
-                    });
-                }
+                push_storage_spec(storage, &nested_name, super_data_ty);
 
                 // Parse the nested superstate's contents
                 let block_content;
@@ -354,18 +293,12 @@ pub fn parse_superstate_block(
                 let initial_ident: Ident = content.parse()?;
                 initial_spec = Some(initial_ident);
             }
-            other => {
-                return Err(syn::Error::new(
-                    entry.span(),
-                    format!("unexpected key `{}`", other),
-                ));
+            _ => {
+                return Err(unexpected_key(&entry));
             }
         }
 
-        // Optional trailing comma
-        if content.peek(Token![,]) {
-            content.parse::<Token![,]>()?;
-        }
+        skip_optional_comma(content)?;
     }
 
     // Remove ourselves from the ancestor chain
@@ -453,18 +386,12 @@ pub fn parse_events(input: &ParseBuffer<'_>) -> Result<Vec<Event>> {
                     content.parse::<Token![:]>()?;
                     payload = Some(content.parse()?);
                 }
-                other => {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        format!("unexpected key `{}`", other),
-                    ));
+                _ => {
+                    return Err(unexpected_key(&key));
                 }
             }
 
-            // Optional trailing comma
-            if content.peek(Token![,]) {
-                content.parse::<Token![,]>()?;
-            }
+            skip_optional_comma(&content)?;
         }
 
         events.push(Event {
@@ -478,10 +405,7 @@ pub fn parse_events(input: &ParseBuffer<'_>) -> Result<Vec<Event>> {
             around,
         });
 
-        // Optional trailing comma
-        if input.peek(Token![,]) {
-            input.parse::<Token![,]>()?;
-        }
+        skip_optional_comma(input)?;
     }
 
     Ok(events)
@@ -523,18 +447,12 @@ pub fn parse_transition(input: &ParseBuffer<'_>) -> Result<Transition> {
             "around" => {
                 around = parse_ident_list_value(input)?;
             }
-            other => {
-                return Err(syn::Error::new(
-                    key.span(),
-                    format!("unexpected key `{}`", other),
-                ));
+            _ => {
+                return Err(unexpected_key(&key));
             }
         }
 
-        // Optional trailing comma
-        if input.peek(Token![,]) {
-            input.parse::<Token![,]>()?;
-        }
+        skip_optional_comma(input)?;
     }
 
     Ok(Transition {
@@ -552,6 +470,30 @@ pub fn parse_transition(input: &ParseBuffer<'_>) -> Result<Transition> {
 
 // ========== Helper Functions ==========
 
+/// Consume an optional trailing comma if one is present.
+fn skip_optional_comma(input: &ParseBuffer<'_>) -> Result<()> {
+    if input.peek(Token![,]) {
+        input.parse::<Token![,]>()?;
+    }
+    Ok(())
+}
+
+/// Build the standard "unexpected key" error anchored at the key's span.
+fn unexpected_key(key: &Ident) -> syn::Error {
+    syn::Error::new(key.span(), format!("unexpected key `{}`", key))
+}
+
+/// Parse an optional `(Type)` suffix used to attach data to a state.
+fn parse_optional_paren_type(input: &ParseBuffer<'_>) -> Result<Option<syn::Type>> {
+    if input.peek(syn::token::Paren) {
+        let ty_content;
+        parenthesized!(ty_content in input);
+        Ok(Some(ty_content.parse()?))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Parse a comma-separated list of identifiers.
 ///
 /// Used for parsing lists like `StateA, StateB, StateC`.
@@ -559,9 +501,7 @@ pub fn parse_ident_list(input: &ParseBuffer<'_>) -> Result<Vec<Ident>> {
     let mut items = Vec::new();
     while !input.is_empty() {
         items.push(input.parse()?);
-        if input.peek(Token![,]) {
-            input.parse::<Token![,]>()?;
-        }
+        skip_optional_comma(input)?;
     }
     Ok(items)
 }
@@ -586,12 +526,21 @@ pub fn parse_state_set(input: &ParseBuffer<'_>) -> Result<Vec<Ident>> {
 /// This is similar to parse_state_set but used for non-state lists
 /// like guards, callbacks, etc.
 pub fn parse_ident_list_value(input: &ParseBuffer<'_>) -> Result<Vec<Ident>> {
-    if input.peek(syn::token::Bracket) {
-        let content;
-        bracketed!(content in input);
-        parse_ident_list(&content)
-    } else {
-        Ok(vec![input.parse()?])
+    parse_state_set(input)
+}
+
+/// Push a storage spec for a state that declares associated data.
+///
+/// No-op when the state has no data type. Centralises the field-name
+/// derivation so leaf states and superstates stay consistent.
+fn push_storage_spec(storage: &mut Vec<StateStorageSpec>, state_name: &Ident, ty: Option<syn::Type>) {
+    if let Some(ty) = ty {
+        let field = storage_field_ident(state_name);
+        storage.push(StateStorageSpec {
+            state_name: state_name.clone(),
+            field,
+            ty,
+        });
     }
 }
 

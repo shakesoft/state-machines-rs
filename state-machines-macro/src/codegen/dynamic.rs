@@ -11,6 +11,19 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::Result;
 
+/// Generic parameters for the dynamic wrappers, as `(decl, decl)`.
+///
+/// Empty when the machine has a concrete context type; `<C>` when the context
+/// is generic. Both elements are identical and returned as a pair for ergonomic
+/// destructuring at call sites.
+fn context_generics(machine: &StateMachine) -> (TokenStream2, TokenStream2) {
+    if machine.context.is_some() {
+        (quote! {}, quote! {})
+    } else {
+        (quote! { <C> }, quote! { <C> })
+    }
+}
+
 /// Generate dynamic dispatch wrapper code for the state machine.
 ///
 /// This generates:
@@ -127,13 +140,7 @@ fn generate_any_state_enum(machine: &StateMachine) -> Result<TokenStream2> {
     });
 
     // Determine enum generics
-    let (enum_generics, impl_generics) = if machine.context.is_some() {
-        // Concrete context: no generics
-        (quote! {}, quote! {})
-    } else {
-        // Generic context
-        (quote! { <C> }, quote! { <C> })
-    };
+    let (enum_generics, impl_generics) = context_generics(machine);
 
     Ok(quote! {
         /// Internal enum wrapping all typed state machines.
@@ -191,19 +198,6 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
         quote! { state_machines::DynamicError::from_event_error(err) }
     } else {
         quote! { state_machines::DynamicError::from_guard_error(err) }
-    };
-
-    // Helper to convert snake_case to PascalCase for enum variants
-    let to_pascal_case = |s: &str| -> String {
-        s.split('_')
-            .map(|word| {
-                let mut chars = word.chars();
-                match chars.next() {
-                    None => String::new(),
-                    Some(first) => first.to_uppercase().chain(chars).collect(),
-                }
-            })
-            .collect()
     };
 
     // Generate match arms for handle() method
@@ -499,13 +493,7 @@ fn generate_conversions(machine: &StateMachine) -> Result<TokenStream2> {
     let any_state_name = quote::format_ident!("Any{}State", machine_name);
 
     // Determine context type for conversions
-    let (impl_generics, dynamic_generics) = if machine.context.is_some() {
-        // Concrete context
-        (quote! {}, quote! {})
-    } else {
-        // Generic context
-        (quote! { <C> }, quote! { <C> })
-    };
+    let (impl_generics, dynamic_generics) = context_generics(machine);
 
     // Generate into_dynamic() methods for each state
     let into_dynamic_methods =

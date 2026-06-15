@@ -12,8 +12,21 @@
 
 use crate::codegen::utils::to_snake_case;
 use crate::types::*;
+use proc_macro2::Span;
 use std::collections::HashSet;
 use syn::Result;
+
+/// Return a spanned validation error when `cond` holds.
+///
+/// Lets each invariant in `validate` read as a single line instead of an
+/// `if … { return Err(syn::Error::new(…)) }` block.
+fn err_if(cond: bool, span: Span, msg: &str) -> Result<()> {
+    if cond {
+        Err(syn::Error::new(span, msg))
+    } else {
+        Ok(())
+    }
+}
 
 /// Check if a string is in snake_case format.
 ///
@@ -66,31 +79,28 @@ impl StateMachine {
     /// The error includes a span pointing to the problematic element
     /// and a descriptive message.
     pub fn validate(&self) -> Result<()> {
-        if self.async_mode && !cfg!(feature = "async") {
-            return Err(syn::Error::new(
-                self.name.span(),
-                "`async: true` requires enabling the `async` feature on `state-machines`",
-            ));
-        }
+        err_if(
+            self.async_mode && !cfg!(feature = "async"),
+            self.name.span(),
+            "`async: true` requires enabling the `async` feature on `state-machines`",
+        )?;
 
         // Validate initial state
 
         // The initial state must be a leaf state, not a superstate
         // This prevents ambiguity about which child state to start in
-        if self.hierarchy.is_superstate(&self.initial) {
-            return Err(syn::Error::new(
-                self.initial.span(),
-                "`initial` must reference a leaf state",
-            ));
-        }
+        err_if(
+            self.hierarchy.is_superstate(&self.initial),
+            self.initial.span(),
+            "`initial` must reference a leaf state",
+        )?;
 
         // The initial state must be declared in the states list
-        if !self.states.iter().any(|state| state == &self.initial) {
-            return Err(syn::Error::new(
-                self.initial.span(),
-                "`initial` must be a member of `states`",
-            ));
-        }
+        err_if(
+            !self.states.iter().any(|state| state == &self.initial),
+            self.initial.span(),
+            "`initial` must be a member of `states`",
+        )?;
 
         // Validate states
 
@@ -122,21 +132,19 @@ impl StateMachine {
 
             // Each event must have at least one transition
             // An event with no transitions would be useless
-            if event.transitions.is_empty() {
-                return Err(syn::Error::new(
-                    event.name.span(),
-                    "event must declare at least one transition",
-                ));
-            }
+            err_if(
+                event.transitions.is_empty(),
+                event.name.span(),
+                "event must declare at least one transition",
+            )?;
 
             for transition in &event.transitions {
                 // Each transition must have at least one source state
-                if transition.sources.is_empty() {
-                    return Err(syn::Error::new(
-                        transition.target.span(),
-                        "transition must declare at least one source state",
-                    ));
-                }
+                err_if(
+                    transition.sources.is_empty(),
+                    transition.target.span(),
+                    "transition must declare at least one source state",
+                )?;
 
                 // Validate and resolve the target state
 
@@ -158,12 +166,11 @@ impl StateMachine {
                 };
 
                 // The resolved target must be a declared leaf state
-                if !self.states.iter().any(|state| state == &resolved_target) {
-                    return Err(syn::Error::new(
-                        transition.target.span(),
-                        "target state not declared in `states`",
-                    ));
-                }
+                err_if(
+                    !self.states.iter().any(|state| state == &resolved_target),
+                    transition.target.span(),
+                    "target state not declared in `states`",
+                )?;
 
                 // Validate source states
 
@@ -174,23 +181,21 @@ impl StateMachine {
                     let is_super = self.hierarchy.is_superstate(source);
 
                     // Source must be either a leaf or a superstate
-                    if !(is_leaf || is_super) {
-                        return Err(syn::Error::new(
-                            source.span(),
-                            "source state not declared in `states` or superstates",
-                        ));
-                    }
+                    err_if(
+                        !(is_leaf || is_super),
+                        source.span(),
+                        "source state not declared in `states` or superstates",
+                    )?;
 
                     // If it's a superstate, verify it has descendants
                     // This catches edge cases where a superstate was declared
                     // but has no children (which should be caught earlier,
                     // but we check again for robustness)
-                    if self.hierarchy.expand_state(source, &self.states).is_empty() {
-                        return Err(syn::Error::new(
-                            source.span(),
-                            "superstate does not resolve to any leaf states",
-                        ));
-                    }
+                    err_if(
+                        self.hierarchy.expand_state(source, &self.states).is_empty(),
+                        source.span(),
+                        "superstate does not resolve to any leaf states",
+                    )?;
                 }
             }
         }

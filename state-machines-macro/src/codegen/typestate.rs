@@ -341,6 +341,53 @@ fn generate_constructor(machine: &StateMachine, _state: &Ident) -> Result<TokenS
 ///     Ok(new_machine)
 /// }
 /// ```
+/// Build the `Result<...>` return type for a transition method.
+///
+/// The success variant is the machine specialised to `target_state`; the error
+/// variant carries `(Self, return_error_ty)`. The generic `C` context parameter
+/// is included only when the machine has no concrete context type.
+fn transition_return_type(
+    machine: &StateMachine,
+    target_state: &Ident,
+    return_error_ty: &TokenStream2,
+) -> TokenStream2 {
+    let machine_name = &machine.name;
+    if machine.context.is_some() {
+        quote! {
+            ::core::result::Result<#machine_name<#target_state>, (Self, #return_error_ty)>
+        }
+    } else {
+        quote! {
+            ::core::result::Result<#machine_name<C, #target_state>, (Self, #return_error_ty)>
+        }
+    }
+}
+
+/// Build the per-field storage initialisers for the machine in its target state.
+///
+/// The target state's data field is default-initialised; every other field is
+/// reset to `None`. Shared by leaf and superstate transition generation.
+fn storage_transfers(machine: &StateMachine, target_state: &Ident) -> Vec<TokenStream2> {
+    machine
+        .state_storage
+        .iter()
+        .map(|spec| {
+            let field = &spec.field;
+            let state_name = &spec.state_name;
+            let ty = &spec.ty;
+            if state_name == target_state {
+                quote! {
+                    #field: ::core::option::Option::Some(<#ty as ::core::default::Default>::default())
+                }
+            } else {
+                quote! {
+                    #field: ::core::option::Option::None
+                }
+            }
+        })
+        .collect()
+}
+
 fn generate_transition_method(
     machine: &StateMachine,
     _source_state: &Ident,
@@ -384,15 +431,7 @@ fn generate_transition_method(
         quote! { #core_path::GuardError }
     };
 
-    let return_type = if machine.context.is_some() {
-        quote! {
-            ::core::result::Result<#machine_name<#target_state>, (Self, #return_error_ty)>
-        }
-    } else {
-        quote! {
-            ::core::result::Result<#machine_name<C, #target_state>, (Self, #return_error_ty)>
-        }
-    };
+    let return_type = transition_return_type(machine, target_state, &return_error_ty);
 
     let guard_error = |guard: &Ident| {
         if error_ty.is_some() {
@@ -539,34 +578,9 @@ fn generate_transition_method(
         })
         .collect();
 
-    let restore_source_fields: Vec<_> = machine
-        .state_storage
-        .iter()
-        .map(|spec| {
-            let field = &spec.field;
-            let local = quote::format_ident!("__sm_prev_{}", field);
-            quote! { #field: #local }
-        })
-        .collect();
+    let restore_source_fields = source_field_bindings.clone();
 
-    let storage_transfers: Vec<_> = machine
-        .state_storage
-        .iter()
-        .map(|spec| {
-            let field = &spec.field;
-            let state_name = &spec.state_name;
-            let ty = &spec.ty;
-            if state_name == target_state {
-                quote! {
-                    #field: ::core::option::Option::Some(<#ty as ::core::default::Default>::default())
-                }
-            } else {
-                quote! {
-                    #field: ::core::option::Option::None
-                }
-            }
-        })
-        .collect();
+    let storage_transfers = storage_transfers(machine, target_state);
 
     let after_calls: Vec<_> = edge
         .after
@@ -977,36 +991,10 @@ fn generate_superstate_transition_method(
     };
 
     // Determine return type - depends on whether context is concrete or generic
-    let return_type = if machine.context.is_some() {
-        quote! {
-            ::core::result::Result<#machine_name<#target_state>, (Self, #return_error_ty)>
-        }
-    } else {
-        quote! {
-            ::core::result::Result<#machine_name<C, #target_state>, (Self, #return_error_ty)>
-        }
-    };
+    let return_type = transition_return_type(machine, target_state, &return_error_ty);
 
     // Build storage field transfers for target state
-    let storage_transfers: Vec<_> = machine
-        .state_storage
-        .iter()
-        .map(|spec| {
-            let field = &spec.field;
-            let state_name = &spec.state_name;
-            let ty = &spec.ty;
-
-            if state_name == target_state {
-                quote! {
-                    #field: ::core::option::Option::Some(<#ty as ::core::default::Default>::default())
-                }
-            } else {
-                quote! {
-                    #field: ::core::option::Option::None
-                }
-            }
-        })
-        .collect();
+    let storage_transfers = storage_transfers(machine, target_state);
 
     Ok(quote! {
         #method_sig -> #return_type {
