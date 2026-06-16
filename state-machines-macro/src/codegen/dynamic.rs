@@ -476,6 +476,11 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
         #any_state_name::#initial_state(#machine_name::new(ctx))
     };
     let state_constructor_arms = machine.states.iter().map(|state| {
+        if state == initial_state {
+            return quote! {
+                #state_enum_name::#state => #any_state_name::#state(#machine_name::new(ctx))
+            };
+        }
         let storage_inits = machine
             .state_storage
             .iter()
