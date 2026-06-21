@@ -481,15 +481,12 @@ fn generate_dynamic_machine(machine: &StateMachine) -> Result<TokenStream2> {
                 #state_enum_name::#state => #any_state_name::#state(#machine_name::new(ctx))
             };
         }
-        let storage_inits = machine
-            .state_storage
-            .iter()
-            .map(|spec| {
-                let field = &spec.field;
-                quote! {
+        let storage_inits = machine.state_storage.iter().map(|spec| {
+            let field = &spec.field;
+            quote! {
                 #field: ::core::option::Option::None
             }
-            });
+        });
         quote! {
             #state_enum_name::#state => #any_state_name::#state(
                 #machine_name {

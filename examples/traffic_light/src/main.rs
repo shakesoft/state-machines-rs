@@ -35,7 +35,7 @@ fn main() {
     println!("available: {:?}", available);
 
     let is_available = light.is_available_event(&available[0]);
-    assert_eq!(is_available,true);
+    assert!(is_available);
 
     // Runtime event dispatch.
     light.handle(TrafficLightEvent::Next).unwrap();
